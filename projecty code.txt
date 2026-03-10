@@ -1,0 +1,170 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// --- Pin Definitions ---
+#define PROX_PIN 2        // Proximity sensor
+#define IR_PIN 3          // IR sensor
+#define RELAY_PIN 7       // Relay control
+#define SERVO_PIN 9       // Servo
+#define BUTTON_PIN 4      // Maintenance button
+
+// --- Objects ---
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // I2C LCD (try 0x3F if 0x27 doesn’t work)
+Servo magnetServo;
+
+// --- Timings ---
+const unsigned long relayOnTime = 10000;   // Conveyor ON duration (ms)
+const unsigned long relayOffTime = 4000;   // Conveyor OFF duration (ms)
+
+// --- Flags ---
+bool objectDetected = false;
+
+void setup() {
+  pinMode(PROX_PIN, INPUT);
+  pinMode(IR_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);  // use internal pull-up resistor
+
+  magnetServo.attach(SERVO_PIN);
+  magnetServo.write(0); // start position
+
+  lcd.init();
+  lcd.backlight();
+
+  // --- Serial Monitor Setup ---
+  Serial.begin(9600);
+  Serial.println("Smart Waste System Initializing...");
+  Serial.println("--------------------------------");
+
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Waste Sys");
+  lcd.setCursor(0, 1);
+  lcd.print("Initializing...");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  // Check maintenance button first
+  if (digitalRead(BUTTON_PIN) == LOW) {  
+    enterMaintenanceMode();
+    return;  // skip the rest of the loop
+  }
+
+  int proxVal = digitalRead(PROX_PIN);
+  int irVal = digitalRead(IR_PIN);
+
+  // --- Display real-time sensor status ---
+  lcd.setCursor(0, 0);
+  lcd.print("IR: ");
+  lcd.print(irVal == LOW ? "DETECTED " : "CLEAR     ");
+  
+  lcd.setCursor(0, 1);
+  lcd.print("PROX: ");
+  lcd.print(proxVal == LOW ? "DETECTED " : "CLEAR     ");
+
+  // --- Serial output for sensor status ---
+  Serial.print("IR Sensor: ");
+  Serial.print(irVal == LOW ? "DETECTED" : "CLEAR");
+  Serial.print(" | Proximity Sensor: ");
+  Serial.println(proxVal == LOW ? "DETECTED" : "CLEAR");
+
+  // --- Control logic ---
+  if (proxVal == LOW || irVal == LOW) {
+    if (!objectDetected) {
+      Serial.println(">> Object detected — starting process...");
+    }
+    objectDetected = true;
+    handleProcess();
+  } else {
+    if (objectDetected) {
+      Serial.println(">> No object detected — system idle.");
+    }
+    objectDetected = false;
+    digitalWrite(RELAY_PIN, HIGH);  // stop all
+  }
+
+  delay(200); // small delay for LCD & serial refresh
+}
+
+void handleProcess() {
+  // Turn ON conveyor, fan, electromagnet
+  digitalWrite(RELAY_PIN, LOW);
+  unsigned long startTime = millis();
+
+  Serial.println("Relay ON — Conveyor, Fan, and Magnet Active");
+
+  // Display timer while relay ON
+  while (millis() - startTime < relayOnTime) {
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      enterMaintenanceMode();
+      return;
+    }
+
+    unsigned long elapsed = (millis() - startTime) / 1000;
+    lcd.setCursor(0, 0);
+    lcd.print("Processing...    ");
+    lcd.setCursor(0, 1);
+    lcd.print("Timer: ");
+    lcd.print(elapsed);
+    lcd.print("s    ");
+
+    // Print timer to Serial Monitor every second
+    if ((millis() - startTime) % 1000 < 200) {
+      Serial.print("Processing time: ");
+      Serial.print(elapsed);
+      Serial.println("s");
+    }
+  }
+
+  // Rotate servo to drop object
+  magnetServo.write(180);
+  Serial.println("Servo Rotating to 180° (Dropping Object)");
+  delay(1000);
+
+  // Stop conveyor/fan/magnet
+  digitalWrite(RELAY_PIN, HIGH);
+  Serial.println("Relay OFF — Conveyor, Fan, and Magnet Stopped");
+
+  delay(relayOffTime);
+
+  // Reset servo back
+  magnetServo.write(0);
+  Serial.println("Servo Returned to 0° (Ready for Next Object)");
+  delay(500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Cycle Complete");
+  delay(1000);
+  lcd.clear();
+
+  Serial.println(">> Cycle Complete\n");
+}
+
+void enterMaintenanceMode() {
+  // Stop everything
+  digitalWrite(RELAY_PIN, HIGH);
+  magnetServo.write(0);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("System Under");
+  lcd.setCursor(0, 1);
+  lcd.print("Maintenance");
+
+  Serial.println("=== MAINTENANCE MODE ACTIVATED ===");
+  Serial.println("System halted. Waiting for button release...");
+
+  // Stay here until button is released
+  while (digitalRead(BUTTON_PIN) == LOW) {
+    delay(200);
+  }
+
+  Serial.println("Maintenance complete. Resuming normal operation...");
+  lcd.clear();
+  lcd.print("Resuming...");
+  delay(1500);
+  lcd.clear();
+}
